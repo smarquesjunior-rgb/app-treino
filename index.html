@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Treino Intervalado</title>
+  <link rel="manifest" href="manifest.json">
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js');
+    }
+  </script>
+  <style>
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    body { background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+    .card { background: #1e293b; padding: 20px; border-radius: 12px; width: 100%; max-width: 420px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3); }
+    h2 { text-align: center; margin-top: 0; color: #38bdf8; }
+    .input-group { margin-bottom: 12px; }
+    label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 4px; }
+    input, select { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #fff; font-size: 15px; }
+    .display { text-align: center; margin: 20px 0; padding: 15px; border-radius: 10px; background: #0f172a; border: 2px solid #38bdf8; }
+    .phase-badge { font-size: 18px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; }
+    .time-large { font-size: 42px; font-weight: 800; font-variant-numeric: tabular-nums; margin: 5px 0; }
+    .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; }
+    .stat-box { background: #334155; padding: 10px; border-radius: 8px; text-align: center; }
+    .stat-box span { display: block; font-size: 12px; color: #94a3b8; }
+    .stat-box strong { font-size: 18px; color: #38bdf8; }
+    .btn { width: 100%; padding: 14px; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; margin-top: 10px; transition: 0.2s; }
+    .btn-start { background: #22c55e; color: #000; }
+    .btn-stop { background: #ef4444; color: #fff; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h2>Monitor de Treino</h2>
+
+  <div id="setup-panel">
+    <div class="input-group">
+      <label>Tempo de Caminhada (minutos):</label>
+      <input type="number" id="walk-min" value="5" min="1">
+    </div>
+    <div class="input-group">
+      <label>Tempo de Corrida (minutos):</label>
+      <input type="number" id="run-min" value="2" min="1">
+    </div>
+    <div class="input-group">
+      <label>Meta do Treino:</label>
+      <select id="goal-type" onchange="toggleGoalInput()">
+        <option value="time">Por Tempo Total (minutos)</option>
+        <option value="distance">Por Distância Total (km)</option>
+      </select>
+    </div>
+    <div class="input-group">
+      <label id="goal-label">Duração Total (min):</label>
+      <input type="number" id="goal-val" value="40" step="0.1">
+    </div>
+    <div class="input-group">
+      <label>Seu Peso (kg) - para calorias:</label>
+      <input type="number" id="user-weight" value="84">
+    </div>
+    <button class="btn btn-start" onclick="iniciarTreino()">Iniciar Treino</button>
+  </div>
+
+  <div id="active-panel" class="hidden">
+    <div class="display" id="phase-card">
+      <div id="phase-label" class="phase-badge" style="color: #22c55e;">Aquecendo / Caminhada</div>
+      <div id="phase-timer" class="time-large">05:00</div>
+      <small id="overall-status">Tempo decorrido: 00:00</small>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-box">
+        <span>Distância</span>
+        <strong id="live-dist">0.00 km</strong>
+      </div>
+      <div class="stat-box">
+        <span>Ritmo Médio</span>
+        <strong id="live-pace">0'00"/km</strong>
+      </div>
+      <div class="stat-box">
+        <span>Calorias</span>
+        <strong id="live-cal">0 kcal</strong>
+      </div>
+      <div class="stat-box">
+        <span>Progresso Meta</span>
+        <strong id="live-progress">0%</strong>
+      </div>
+    </div>
+
+    <button class="btn btn-stop" onclick="encerrarTreino()">Finalizar Treino</button>
+  </div>
+
+  <div id="report-panel" class="hidden">
+    <h3 style="text-align:center; color:#38bdf8;">Diagnóstico do Treino</h3>
+    <div class="stats-grid" style="grid-template-columns: 1fr;">
+      <div class="stat-box"><span>Duração Total</span><strong id="rep-time">00:00</strong></div>
+      <div class="stat-box"><span>Distância Percorrida</span><strong id="rep-dist">0.00 km</strong></div>
+      <div class="stat-box"><span>Pace Médio</span><strong id="rep-pace">0'00"/km</strong></div>
+      <div class="stat-box"><span>Gasto Energético Estimado</span><strong id="rep-cal">0 kcal</strong></div>
+      <div class="stat-box"><span>Ciclos Completados</span><strong id="rep-cycles">0</strong></div>
+    </div>
+    <button class="btn btn-start" onclick="resetApp()">Novo Treino</button>
+  </div>
+</div>
+
+<script>
+let walkSec, runSec, goalType, goalVal, weight;
+let totalElapsedSec = 0;
+let phaseElapsedSec = 0;
+let currentPhase = 'walk';
+let cycleCount = 0;
+let timerInterval = null;
+
+let totalDistanceMeters = 0;
+let lastCoord = null;
+let watchId = null;
+
+function toggleGoalInput() {
+  const type = document.getElementById('goal-type').value;
+  document.getElementById('goal-label').innerText = type === 'time' ? 'Duração Total (min):' : 'Distância Total (km):';
+}
+
+function falar(texto) {
+  if ('speechSynthesis' in window) {
+    const utterance = new SpeechSynthesisUtterance(texto);
+    utterance.lang = 'pt-BR';
+    speechSynthesis.speak(utterance);
+  }
+  if ('vibrate' in navigator) {
+    navigator.vibrate([300, 100, 300]);
+  }
+}
+
+function calcDistancia(lat1, lon1, lat2, lon2) {
+  const R = 6371e3;
+  const φ1 = lat1 * Math.PI / 180;
+  const φ2 = lat2 * Math.PI / 180;
+  const Δφ = (lat2 - lat1) * Math.PI / 180;
+  const Δλ = (lon2 - lon1) * Math.PI / 180;
+
+  const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+            Math.cos(φ1) * Math.cos(φ2) *
+            Math.sin(Δλ/2) * Math.sin(Δλ/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}
+
+function iniciarTreino() {
+  walkSec = parseInt(document.getElementById('walk-min').value) * 60;
+  runSec = parseInt(document.getElementById('run-min').value) * 60;
+  goalType = document.getElementById('goal-type').value;
+  goalVal = parseFloat(document.getElementById('goal-val').value);
+  weight = parseFloat(document.getElementById('user-weight').value) || 80;
+
+  totalElapsedSec = 0;
+  phaseElapsedSec = 0;
+  totalDistanceMeters = 0;
+  lastCoord = null;
+  cycleCount = 0;
+  currentPhase = 'walk';
+
+  document.getElementById('setup-panel').classList.add('hidden');
+  document.getElementById('report-panel').classList.add('hidden');
+  document.getElementById('active-panel').classList.remove('hidden');
+
+  falar("Treino iniciado. Comece caminhando.");
+  atualizarVisualFase();
+
+  if ('geolocation' in navigator) {
+    watchId = navigator.geolocation.watchPosition(pos => {
+      const { latitude, longitude } = pos.coords;
+      if (lastCoord) {
+        const delta = calcDistancia(lastCoord.lat, lastCoord.lon, latitude, longitude);
+        if (delta > 2 && delta < 50) {
+          totalDistanceMeters += delta;
+        }
+      }
+      lastCoord = { lat: latitude, lon: longitude };
+    }, err => console.warn(err), { enableHighAccuracy: true });
+  }
+
+  timerInterval = setInterval(tick, 1000);
+}
+
+function tick() {
+  totalElapsedSec++;
+  phaseElapsedSec++;
+
+  const limitSec = currentPhase === 'walk' ? walkSec : runSec;
+  const remainingPhaseSec = limitSec - phaseElapsedSec;
+
+  if (remainingPhaseSec <= 0) {
+    alternarFase();
+  }
+
+  renderizarDashboard(remainingPhaseSec);
+  verificarMeta();
+}
+
+function alternarFase() {
+  phaseElapsedSec = 0;
+  if (currentPhase === 'walk') {
+    currentPhase = 'run';
+    falar("Atenção: Comece a correr!");
+  } else {
+    currentPhase = 'walk';
+    cycleCount++;
+    falar("Atenção: Reduza para caminhada.");
+  }
+  atualizarVisualFase();
+}
+
+function atualizarVisualFase() {
+  const lbl = document.getElementById('phase-label');
+  if (currentPhase === 'walk') {
+    lbl.innerText = "Caminhada";
+    lbl.style.color = "#22c55e";
+  } else {
+    lbl.innerText = "Corrida";
+    lbl.style.color = "#f97316";
+  }
+}
+
+function formatarTempo(segundos) {
+  const m = Math.floor(Math.abs(segundos) / 60);
+  const s = Math.floor(Math.abs(segundos) % 60);
+  return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
+}
+
+function renderizarDashboard(remSec) {
+  document.getElementById('phase-timer').innerText = formatarTempo(remSec);
+  document.getElementById('overall-status').innerText = `Decorrido: ${formatarTempo(totalElapsedSec)}`;
+
+  const distKm = totalDistanceMeters / 1000;
+  document.getElementById('live-dist').innerText = `${distKm.toFixed(2)} km`;
+
+  if (distKm > 0.05) {
+    const paceMinPerKm = (totalElapsedSec / 60) / distKm;
+    document.getElementById('live-pace').innerText = `${formatarTempo(paceMinPerKm * 60)}/km`;
+  }
+
+  const MET = currentPhase === 'walk' ? 4 : 9;
+  const calPerHour = MET * weight;
+  const totalCal = ((calPerHour / 3600) * totalElapsedSec);
+  document.getElementById('live-cal').innerText = `${Math.round(totalCal)} kcal`;
+
+  let perc = 0;
+  if (goalType === 'time') {
+    perc = Math.min(100, Math.round((totalElapsedSec / (goalVal * 60)) * 100));
+  } else {
+    perc = Math.min(100, Math.round((distKm / goalVal) * 100));
+  }
+  document.getElementById('live-progress').innerText = `${perc}%`;
+}
+
+function verificarMeta() {
+  const distKm = totalDistanceMeters / 1000;
+  if (goalType === 'time' && totalElapsedSec >= goalVal * 60) {
+    encerrarTreino(true);
+  } else if (goalType === 'distance' && distKm >= goalVal) {
+    encerrarTreino(true);
+  }
+}
+
+function encerrarTreino(atingiuMeta = false) {
+  clearInterval(timerInterval);
+  if (watchId) navigator.geolocation.clearWatch(watchId);
+
+  falar(atingiuMeta ? "Parabéns! Meta atingida." : "Treino finalizado.");
+
+  document.getElementById('active-panel').classList.add('hidden');
+  document.getElementById('report-panel').classList.remove('hidden');
+
+  const distKm = totalDistanceMeters / 1000;
+  const paceMinPerKm = distKm > 0.05 ? ((totalElapsedSec / 60) / distKm) : 0;
+  const calTotal = ((6 * weight) / 3600) * totalElapsedSec;
+
+  document.getElementById('rep-time').innerText = formatarTempo(totalElapsedSec);
+  document.getElementById('rep-dist').innerText = `${distKm.toFixed(2)} km`;
+  document.getElementById('rep-pace').innerText = paceMinPerKm ? `${formatarTempo(paceMinPerKm * 60)}/km` : '--';
+  document.getElementById('rep-cal').innerText = `${Math.round(calTotal)} kcal`;
+  document.getElementById('rep-cycles').innerText = `${cycleCount} ciclos completos`;
+}
+
+function resetApp() {
+  document.getElementById('report-panel').classList.add('hidden');
+  document.getElementById('setup-panel').classList.remove('hidden');
+}
+</script>
+</body>
+</html>
