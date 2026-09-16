@@ -117,9 +117,80 @@ let totalDistanceMeters = 0;
 let lastCoord = null;
 let watchId = null;
 
+// Variáveis para manter o app vivo em segundo plano
+let wakeLock = null;
+let audioCtx = null;
+let silenceOscillator = null;
+
 function toggleGoalInput() {
   const type = document.getElementById('goal-type').value;
   document.getElementById('goal-label').innerText = type === 'time' ? 'Duração Total (min):' : 'Distância Total (km):';
+}
+
+// 1. Manter tela acordada
+async function requestWakeLock() {
+  try {
+    if ('wakeLock' in navigator) {
+      wakeLock = await navigator.wakeLock.request('screen');
+    }
+  } catch (err) {
+    console.warn('Wake Lock não suportado ou bloqueado:', err);
+  }
+}
+
+// 2. Tocar áudio silencioso contínuo para evitar suspensão do navegador
+function playSilentLoop() {
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    
+    audioCtx = new AudioContext();
+    silenceOscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+    
+    // Frequência inaudível e ganho quase nulo
+    silenceOscillator.frequency.value = 40;
+    gainNode.gain.value = 0.0001;
+    
+    silenceOscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    
+    silenceOscillator.start();
+
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: 'Treino Intervalado em Execução',
+        artist: 'Monitor Ativo',
+        album: 'Caminhada / Corrida'
+      });
+      navigator.mediaSession.playbackState = 'playing';
+    }
+  } catch (e) {
+    console.warn('Falha ao iniciar áudio de segundo plano:', e);
+  }
+}
+
+// 3. Encerrar recursos de segundo plano
+function stopBackgroundServices() {
+  if (wakeLock) {
+    wakeLock.release().then(() => wakeLock = null).catch(() => {});
+  }
+  if (silenceOscillator) {
+    try {
+      silenceOscillator.stop();
+      silenceOscillator.disconnect();
+    } catch (e) {}
+    silenceOscillator = null;
+  }
+  if (audioCtx) {
+    try {
+      audioCtx.close();
+    } catch (e) {}
+    audioCtx = null;
+  }
+  if ('mediaSession' in navigator) {
+    navigator.mediaSession.playbackState = 'none';
+  }
 }
 
 function falar(texto) {
@@ -152,7 +223,7 @@ function iniciarTreino() {
   runSec = parseInt(document.getElementById('run-min').value) * 60;
   goalType = document.getElementById('goal-type').value;
   goalVal = parseFloat(document.getElementById('goal-val').value);
-  weight = parseFloat(document.getElementById('user-weight').value) || 80;
+  weight = parseFloat(document.getElementById('user-weight').value) || 84;
 
   totalElapsedSec = 0;
   phaseElapsedSec = 0;
@@ -160,6 +231,10 @@ function iniciarTreino() {
   lastCoord = null;
   cycleCount = 0;
   currentPhase = 'walk';
+
+  // Inicia segundo plano e tela ativa
+  requestWakeLock();
+  playSilentLoop();
 
   document.getElementById('setup-panel').classList.add('hidden');
   document.getElementById('report-panel').classList.add('hidden');
@@ -267,6 +342,8 @@ function verificarMeta() {
 function encerrarTreino(atingiuMeta = false) {
   clearInterval(timerInterval);
   if (watchId) navigator.geolocation.clearWatch(watchId);
+
+  stopBackgroundServices();
 
   falar(atingiuMeta ? "Parabéns! Meta atingida." : "Treino finalizado.");
 
